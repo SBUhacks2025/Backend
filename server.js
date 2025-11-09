@@ -4,9 +4,26 @@ const express = require('express');
 const mysql = require('mysql2/promise');
 const cors = require('cors');
 const morgan = require('morgan');
+const { Client, GatewayIntentBits } = require('discord.js'); //imports discord.js
 
 const app = express();
 const PORT = process.env.PORT || 3001;
+
+const DISCORD_CHANNEL_ID = process.env.DISCORD_CHANNEL_ID;
+
+const client = new Client({
+    intents: [
+        GatewayIntentBits.Guilds,
+        GatewayIntentBits.GuildMessages,
+        GatewayIntentBits.MessageContent // Include if you need to read message content
+    ]
+});
+
+client.on('ready', () => {
+    console.log(`Logged in as ${client.user.tag}!`);
+});
+
+client.login(process.env.CLIENT_TOKEN); //signs the bot in with token
 
 // HTTP 요청 로깅 미들웨어
 app.use(morgan('dev')); // 개발용: 간단한 로그
@@ -47,7 +64,7 @@ async function testConnection() {
         connection.release();
     } catch (error) {
         console.error('\n❌ DB 연결 오류 발생!\n');
-        
+
         if (error.code === 'ER_ACCESS_DENIED_ERROR') {
             console.error('오류: Access denied for user');
             console.error('원인: .env 파일의 DB_PASSWORD가 틀렸습니다.');
@@ -78,7 +95,7 @@ const FAKE_AUTH_USER_ID = 1;
  */
 app.get('/api/reports', async (req, res) => {
     const userId = FAKE_AUTH_USER_ID;
-    
+
     // 쿼리 파라미터 (검색, 필터, 페이지)
     const { status, search } = req.query;
     const page = parseInt(req.query.page) || 1;
@@ -87,7 +104,7 @@ app.get('/api/reports', async (req, res) => {
 
     let sql = `SELECT ticket_id, issue_type, title, description, status, created_at FROM reports WHERE submitted_by_user_id = ?`;
     let countSql = `SELECT COUNT(*) as total FROM reports WHERE submitted_by_user_id = ?`;
-    
+
     const params = [userId];
     const countParams = [userId];
 
@@ -116,13 +133,13 @@ app.get('/api/reports', async (req, res) => {
 
     try {
         const connection = await pool.getConnection();
-        
+
         // 디버깅: 쿼리와 파라미터 확인 (필요시 주석 해제)
         // console.log('SQL:', sql);
         // console.log('Params:', params);
         // console.log('Count SQL:', countSql);
         // console.log('Count Params:', countParams);
-        
+
         // 총 개수
         const [countRows] = await connection.execute(countSql, countParams);
         const totalResults = countRows[0].total;
@@ -130,7 +147,7 @@ app.get('/api/reports', async (req, res) => {
 
         // 실제 데이터
         const [reports] = await connection.execute(sql, params);
-        
+
         connection.release();
 
         // 응답 데이터 포맷팅 (프론트엔드 요구사항에 맞게)
@@ -155,22 +172,22 @@ app.get('/api/reports', async (req, res) => {
         });
     } catch (error) {
         console.error('Error fetching reports:', error);
-        
+
         // 더 명확한 오류 메시지
         if (error.code === 'ER_ACCESS_DENIED_ERROR') {
-            res.status(500).json({ 
+            res.status(500).json({
                 error: 'Database access denied',
-                message: '.env 파일의 DB_PASSWORD를 확인하세요.' 
+                message: '.env 파일의 DB_PASSWORD를 확인하세요.'
             });
         } else if (error.code === 'ER_BAD_DB_ERROR') {
-            res.status(500).json({ 
+            res.status(500).json({
                 error: 'Database not found',
-                message: 'CREATE DATABASE secure_sbu;를 실행하세요.' 
+                message: 'CREATE DATABASE secure_sbu;를 실행하세요.'
             });
         } else if (error.code === 'ER_NO_SUCH_TABLE') {
-            res.status(500).json({ 
+            res.status(500).json({
                 error: 'Table not found',
-                message: 'CREATE TABLE reports...를 실행하세요.' 
+                message: 'CREATE TABLE reports...를 실행하세요.'
             });
         } else {
             res.status(500).json({ error: 'Server error', details: error.message });
@@ -184,18 +201,18 @@ app.get('/api/reports', async (req, res) => {
  */
 app.post('/api/reports', async (req, res) => {
     const userId = FAKE_AUTH_USER_ID;
-    
+
     // 요청 본문에서 데이터 추출
     const { issue_type, title, description } = req.body;
-    
+
     // 필수 필드 검증
     if (!issue_type || !title || !description) {
-        return res.status(400).json({ 
+        return res.status(400).json({
             error: 'Missing required fields',
-            message: 'issue_type, title, and description are required' 
+            message: 'issue_type, title, and description are required'
         });
     }
-    
+
     // issue_type 유효성 검증
     const validIssueTypes = [
         'phishing',
@@ -203,17 +220,17 @@ app.post('/api/reports', async (req, res) => {
         'lost-device',
         'terror-threat'
     ];
-    
+
     if (!validIssueTypes.includes(issue_type)) {
-        return res.status(400).json({ 
+        return res.status(400).json({
             error: 'Invalid issue_type',
-            message: `issue_type must be one of: ${validIssueTypes.join(', ')}` 
+            message: `issue_type must be one of: ${validIssueTypes.join(', ')}`
         });
     }
-    
+
     try {
         const connection = await pool.getConnection();
-        
+
         // 1. 다음 ticket_id 생성 (가장 최근 ticket_id의 숫자 부분 + 1)
         let ticketId;
         try {
@@ -221,13 +238,13 @@ app.post('/api/reports', async (req, res) => {
             const [allTickets] = await connection.execute(
                 `SELECT ticket_id FROM reports WHERE ticket_id LIKE 'SBU-%'`
             );
-            
+
             if (allTickets.length > 0) {
                 // 숫자 부분만 추출하여 최대값 찾기
                 const numbers = allTickets
                     .map(t => parseInt(t.ticket_id.replace('SBU-', ''), 10))
                     .filter(n => !isNaN(n));
-                
+
                 if (numbers.length > 0) {
                     const maxNumber = Math.max(...numbers);
                     ticketId = `SBU-${maxNumber + 1}`;
@@ -246,11 +263,11 @@ app.post('/api/reports', async (req, res) => {
             const fallbackNumber = 84393 + (countRows[0].count || 0) + 1;
             ticketId = `SBU-${fallbackNumber}`;
         }
-        
-        // 2. 리포트 삽입
+
+        // // 2. 리포트 삽입
         const status = 'Pending Review'; // 기본 상태
         const createdAt = new Date().toISOString().slice(0, 19).replace('T', ' ');
-        
+
         await connection.execute(
             `INSERT INTO reports (
                 ticket_id, 
@@ -263,9 +280,29 @@ app.post('/api/reports', async (req, res) => {
             ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
             [ticketId, issue_type, title, description, status, userId, createdAt]
         );
-        
+
         connection.release();
-        
+
+        if (DISCORD_CHANNEL_ID) {
+            const channel = client.channels.cache.get(DISCORD_CHANNEL_ID);
+
+            if (channel) {
+                const message = `🚨 **New report ticket submitted!** 🚨\n\n` +
+                    `**Ticket ID:** \`${ticketId}\`\n` +
+                    `**Issue Type:** \`${issue_type}\`\n` +
+                    `**Title:** **${title}**\n` +
+                    `**Description:** ${description.substring(0, 50)}\n` +
+                    `**Time:** ${createdAt}\n`;
+
+                await channel.send(message);
+                console.log(`✅ Discord 채널 ${DISCORD_CHANNEL_ID}에 알림 메시지 전송 완료.`);
+            } else {
+                console.warn(`❌ 경고: Discord 클라이언트가 채널 ID ${DISCORD_CHANNEL_ID}를 찾을 수 없습니다. (캐시 문제일 수 있음)`);
+            }
+        } else {
+            console.warn('❌ 경고: DISCORD_CHANNEL_ID가 .env 파일에 설정되지 않았습니다. Discord 알림을 건너뜁니다.');
+        }
+
         // 3. 생성된 리포트 반환
         res.status(201).json({
             message: 'Report submitted successfully',
@@ -278,24 +315,24 @@ app.post('/api/reports', async (req, res) => {
                 created_at: createdAt
             }
         });
-        
+
     } catch (error) {
         console.error('Error submitting report:', error);
-        
+
         if (error.code === 'ER_DUP_ENTRY') {
-            res.status(409).json({ 
+            res.status(409).json({
                 error: 'Duplicate entry',
-                message: 'A report with this ticket_id already exists' 
+                message: 'A report with this ticket_id already exists'
             });
         } else if (error.code === 'ER_NO_REFERENCED_ROW_2' || error.code === 'ER_NO_REFERENCED_ROW') {
-            res.status(400).json({ 
+            res.status(400).json({
                 error: 'Invalid user',
-                message: 'The user does not exist' 
+                message: 'The user does not exist'
             });
         } else {
-            res.status(500).json({ 
-                error: 'Server error', 
-                details: error.message 
+            res.status(500).json({
+                error: 'Server error',
+                details: error.message
             });
         }
     }
